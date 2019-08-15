@@ -1,6 +1,6 @@
 # CmBacktrace: ARM Cortex-M 系列 MCU 错误追踪库
 
-[![GitHub release](https://img.shields.io/github/release/armink/CmBacktrace.svg)](https://github.com/armink/CmBacktrace/releases/latest) [![GitHub commits](https://img.shields.io/github/commits-since/armink/CmBacktrace/0.1.0.svg)](https://github.com/armink/CmBacktrace/0.1.0...master) [![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/armink/CmBacktrace/master/LICENSE)
+[![GitHub release](https://img.shields.io/github/release/armink/CmBacktrace.svg)](https://github.com/armink/CmBacktrace/releases/latest) [![GitHub commits](https://img.shields.io/github/commits-since/armink/CmBacktrace/1.3.0.svg)](https://github.com/armink/CmBacktrace/compare/1.0.0...master) [![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/armink/CmBacktrace/master/LICENSE)
 
 ## 0、CmBacktrace 是什么
 
@@ -14,7 +14,7 @@
 - 支持 裸机 及以下操作系统平台：
     - [RT-Thread](http://www.rt-thread.org/)
     - UCOS
-    - FreeRTOS
+    - FreeRTOS（需修改源码）
 - 根据错误现场状态，输出对应的 线程栈 或 C 主栈；
 - 故障诊断信息支持多国语言（目前：简体中文、英文）；
 - 适配 Cortex-M0/M3/M4/M7 MCU；
@@ -56,9 +56,11 @@
 |目录|平台|链接|
 |:--|:--:|:--:|
 | `\demos\non_os\stm32f10x` |裸机 STM32 Cortex-M3|[点击查看](https://github.com/armink/CmBacktrace/tree/master/demos/non_os/stm32f10x)|
-| `\demos\os\freertos\stm32f10x` |FreeRTOS STM32 Cortex-M3|[点击查看](https://github.com/armink/CmBacktrace/tree/master/demos/os/freertos/stm32f10x)|
-| `\demos\os\ucosii\stm32f20x` |UCOSII STM32 Cortex-M3|[点击查看](https://github.com/armink/CmBacktrace/tree/master/demos/os/ucosii/stm32f20x)|
 | `\demos\os\rtthread\stm32f4xx`|RT-Thread STM32 Cortex-M4|[点击查看](https://github.com/armink/CmBacktrace/tree/master/demos/os/rtthread/stm32f4xx)|
+| `\demos\os\ucosii\stm32f10x` |UCOSII STM32 Cortex-M3|[点击查看](https://github.com/armink/CmBacktrace/tree/master/demos/os/ucosii/stm32f10x)|
+| `\demos\os\freertos\stm32f10x` |FreeRTOS STM32 Cortex-M3|[点击查看](https://github.com/armink/CmBacktrace/tree/master/demos/os/freertos/stm32f10x)|
+
+
 
 ### 2.3 移植说明
 
@@ -123,7 +125,7 @@ size_t cm_backtrace_call_stack(uint32_t *buffer, size_t size, uint32_t sp)
 uint32_t call_stack[16] = {0};
 size_t i, depth = 0;
 /* 获取当前环境下的函数调用栈，每个元素将会以 32 位地址形式存储， depth 为函数调用栈实际深度 */
-depth = cm_backtrace_call_stack(call_stack, sizeof(call_stack), __get_SP());
+depth = cm_backtrace_call_stack(call_stack, sizeof(call_stack), cmb_get_sp());
 /* 输出当前函数调用栈信息
  * 注意：查看函数名称及具体行号时，需要使用 addr2line 工具转换
  */
@@ -173,6 +175,44 @@ void cm_backtrace_fault(uint32_t fault_handler_lr, uint32_t fault_handler_sp)
 
 - 1、注释/删除其他文件中定义的 `HardFault_Handler` 函数，仅保留 cmb_fault.s 中的；
 - 2、将 cmb_fault.s 移除工程，手动添加 `cm_backtrace_fault` 函数至现有的故障处理函数，但需要注意的是，务必 **保证该函数数入参的准备性** ，否则可能会导致故障诊断功能及堆栈打印功能无法正常运行。所以如果是新手，不推荐第二种解决方法。
+
+#### 2.5.4 初始化时提示无法获取主栈（main stack）信息
+
+在 `cmd_def.h` 中有定义默认的主栈配置，大致如下：
+
+```c
+
+#if defined(__CC_ARM)
+    /* C stack block name, default is STACK */
+    #ifndef CMB_CSTACK_BLOCK_NAME
+    #define CMB_CSTACK_BLOCK_NAME          STACK
+    #endif
+    ...
+#elif defined(__ICCARM__)
+    /* C stack block name, default is 'CSTACK' */
+    #ifndef CMB_CSTACK_BLOCK_NAME
+    #define CMB_CSTACK_BLOCK_NAME          "CSTACK"
+    #endif
+    ...
+#elif defined(__GNUC__)
+    /* C stack block start address, defined on linker script file, default is _sstack */
+    #ifndef CMB_CSTACK_BLOCK_START
+    #define CMB_CSTACK_BLOCK_START         _sstack
+    #endif
+    /* C stack block end address, defined on linker script file, default is _estack */
+    #ifndef CMB_CSTACK_BLOCK_END
+    #define CMB_CSTACK_BLOCK_END           _estack
+    #endif
+    ...
+#else
+```
+
+比如在 Keil-MDK 编译器下会默认选择 `STACK` 作为主栈 block 的名称，但在一些特殊平台下，项目的主栈 block 名称可能不叫 `STACK`，导致 CmBacktrace 无法获取到正确的主栈信息，所以在初始化时会有如上的错误提示信息。
+
+解决这个问题一般有两个思路
+
+- 1、在 `cmb_cfg.h` 中重新定义主栈的信息，此时 CmBacktrace 会优先使用 `cmb_cfg.h` 中的配置信息；
+- 2、修改项目配置，如果是 Keil-MDK ，则在启动文件的开头位置，将主栈的名称修改为默认的 `STACK` ，其他编译器一般很少出现该问题。
 
 ### 2.6 许可
 

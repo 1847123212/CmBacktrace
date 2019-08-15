@@ -1,7 +1,7 @@
 /*
  * This file is part of the CmBacktrace Library.
  *
- * Copyright (c) 2016-2017, Armink, <armink.ztl@gmail.com>
+ * Copyright (c) 2016-2019, Armink, <armink.ztl@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -34,7 +34,7 @@
 #include <stdlib.h>
 
 /* library software version number */
-#define CMB_SW_VERSION                "0.1.2"
+#define CMB_SW_VERSION                "1.3.0"
 
 #define CMB_CPU_ARM_CORTEX_M0          0
 #define CMB_CPU_ARM_CORTEX_M3          1
@@ -47,7 +47,7 @@
 #define CMB_OS_PLATFORM_FREERTOS       3
 
 #define CMB_PRINT_LANGUAGE_ENGLISH     0
-#define CMB_PRINT_LANUUAGE_CHINESE     1
+#define CMB_PRINT_LANGUAGE_CHINESE     1
 
 /* name max length, default size: 32 */
 #ifndef CMB_NAME_MAX
@@ -233,7 +233,7 @@ struct cmb_hard_fault_regs{
       unsigned short NOCP       : 1;     // Attempts to execute a coprocessor instruction
       unsigned short UnusedBits : 4;
       unsigned short UNALIGNED  : 1;     // Indicates that an unaligned access fault has taken place
-      unsigned short DIVBYZERO  : 1;     // Indicates a divide by zero has taken place (can be set only if DIV_0_TRP is set)
+      unsigned short DIVBYZERO0 : 1;     // Indicates a divide by zero has taken place (can be set only if DIV_0_TRP is set)
     } bits;
   } ufsr;                                // Usage Fault Status Register (0xE000ED2A)
 
@@ -289,10 +289,6 @@ if (!(EXPR))                                                                   \
     #error "CMB_CPU_PLATFORM_TYPE isn't defined in 'cmb_cfg.h'"
 #endif
 
-#if __STDC_VERSION__ < 199901L
-    #error "not supported compiler, must be C99 or higher. try to add '-std=c99' to compile parameters"
-#endif
-
 #if (defined(CMB_USING_BARE_METAL_PLATFORM) && defined(CMB_USING_OS_PLATFORM))
     #error "CMB_USING_BARE_METAL_PLATFORM and CMB_USING_OS_PLATFORM only one of them can be used"
 #elif defined(CMB_USING_OS_PLATFORM)
@@ -303,28 +299,64 @@ if (!(EXPR))                                                                   \
         #include <rtthread.h>
     #elif (CMB_OS_PLATFORM_TYPE == CMB_OS_PLATFORM_UCOSII)
         #include <ucos_ii.h>
-        //TODO ´ý²âÊÔ
     #elif (CMB_OS_PLATFORM_TYPE == CMB_OS_PLATFORM_UCOSIII)
         #include <os.h>
-        //TODO ´ý²âÊÔ
     #elif (CMB_OS_PLATFORM_TYPE == CMB_OS_PLATFORM_FREERTOS)
-        #error "not implemented, I hope you can do this"
-        //TODO ´ýÊµÏÖ
+        #include <FreeRTOS.h>  
+        extern uint32_t *vTaskStackAddr(void);/* need to modify the FreeRTOS/tasks source code */
+        extern uint32_t vTaskStackSize(void);
+        extern char * vTaskName(void);
     #else
         #error "not supported OS type"
     #endif /* (CMB_OS_PLATFORM_TYPE == CMB_OS_PLATFORM_RTT) */
 #endif /* (defined(CMB_USING_BARE_METAL_PLATFORM) && defined(CMB_USING_OS_PLATFORM)) */
 
-/* include or export for supported, __get_SP function */
+/* include or export for supported cmb_get_msp, cmb_get_psp and cmb_get_sp function */
 #if defined(__CC_ARM)
-    static __inline __asm uint32_t __get_SP(void) {
+    static __inline __asm uint32_t cmb_get_msp(void) {
+        mrs r0, msp
+        bx lr
+    }
+    static __inline __asm uint32_t cmb_get_psp(void) {
+        mrs r0, psp
+        bx lr
+    }
+    static __inline __asm uint32_t cmb_get_sp(void) {
         mov r0, sp
         bx lr
     }
 #elif defined(__ICCARM__)
-    #include <intrinsics.h>
+/* IAR iccarm specific functions */
+/* Close Raw Asm Code Warning */  
+#pragma diag_suppress=Pe940    
+    static uint32_t cmb_get_msp(void)
+    {
+      __asm("mrs r0, msp");
+      __asm("bx lr");        
+    }
+    static uint32_t cmb_get_psp(void)
+    {
+      __asm("mrs r0, psp");
+      __asm("bx lr");        
+    }
+    static uint32_t cmb_get_sp(void)
+    {
+      __asm("mov r0, sp");
+      __asm("bx lr");       
+    }
+#pragma diag_default=Pe940  
 #elif defined(__GNUC__)
-    __attribute__( ( always_inline ) ) static inline uint32_t __get_SP(void) {
+    __attribute__( ( always_inline ) ) static inline uint32_t cmb_get_msp(void) {
+        register uint32_t result;
+        __asm volatile ("MRS %0, msp\n" : "=r" (result) );
+        return(result);
+    }
+    __attribute__( ( always_inline ) ) static inline uint32_t cmb_get_psp(void) {
+        register uint32_t result;
+        __asm volatile ("MRS %0, psp\n" : "=r" (result) );
+        return(result);
+    }
+    __attribute__( ( always_inline ) ) static inline uint32_t cmb_get_sp(void) {
         register uint32_t result;
         __asm volatile ("MOV %0, sp\n" : "=r" (result) );
         return(result);

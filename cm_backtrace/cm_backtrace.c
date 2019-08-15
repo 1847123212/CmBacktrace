@@ -1,7 +1,7 @@
 /*
  * This file is part of the CmBacktrace Library.
  *
- * Copyright (c) 2016-2017, Armink, <armink.ztl@gmail.com>
+ * Copyright (c) 2016-2019, Armink, <armink.ztl@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -31,31 +31,8 @@
 #include <string.h>
 #include <stdio.h>
 
-/* include or export for supported __get_MSP, __get_PSP function */
-#if defined(__CC_ARM)
-    static __inline __asm uint32_t __get_MSP(void) {
-        mrs r0, msp
-        bx lr
-    }
-    static __inline __asm uint32_t __get_PSP(void) {
-        mrs r0, psp
-        bx lr
-    }
-#elif defined(__ICCARM__)
-    #include <intrinsics.h>
-#elif defined(__GNUC__)
-    __attribute__( ( always_inline ) ) static inline uint32_t __get_MSP(void) {
-        register uint32_t result;
-        __asm volatile ("MRS %0, msp\n" : "=r" (result) );
-        return(result);
-    }
-    __attribute__( ( always_inline ) ) static inline uint32_t __get_PSP(void) {
-        register uint32_t result;
-        __asm volatile ("MRS %0, psp\n" : "=r" (result) );
-        return(result);
-    }
-#else
-    #error "not supported compiler"
+#if __STDC_VERSION__ < 199901L
+    #error "must be C99 or higher. try to add '-std=c99' to compile parameters"
 #endif
 
 #if defined(__CC_ARM)
@@ -85,11 +62,14 @@
 #endif
 
 enum {
+    PRINT_MAIN_STACK_CFG_ERROR,
     PRINT_FIRMWARE_INFO,
     PRINT_ASSERT_ON_THREAD,
     PRINT_ASSERT_ON_HANDLER,
     PRINT_THREAD_STACK_INFO,
     PRINT_MAIN_STACK_INFO,
+    PRINT_THREAD_STACK_OVERFLOW,
+    PRINT_MAIN_STACK_OVERFLOW,
     PRINT_CALL_STACK_INFO,
     PRINT_CALL_STACK_ERR,
     PRINT_FAULT_ON_THREAD,
@@ -112,7 +92,7 @@ enum {
     PRINT_UFSR_INVPC,
     PRINT_UFSR_NOCP,
     PRINT_UFSR_UNALIGNED,
-    PRINT_UFSR_DIVBYZERO,
+    PRINT_UFSR_DIVBYZERO0,
     PRINT_DFSR_HALTED,
     PRINT_DFSR_BKPT,
     PRINT_DFSR_DWTTRAP,
@@ -122,79 +102,85 @@ enum {
     PRINT_BFAR,
 };
 
-static const char *print_info[] = {
+static const char * const print_info[] = {
 #if (CMB_PRINT_LANGUAGE == CMB_PRINT_LANGUAGE_ENGLISH)
-        [PRINT_FIRMWARE_INFO]        = "Firmware name: %s, hardware version: %s, software version: %s",
-        [PRINT_ASSERT_ON_THREAD]     = "Assert on thread %s",
-        [PRINT_ASSERT_ON_HANDLER]    = "Assert on interrupt or bare metal(no OS) environment",
-        [PRINT_THREAD_STACK_INFO]    = "===== Thread stack information =====",
-        [PRINT_MAIN_STACK_INFO]      = "====== Main stack information ======",
-        [PRINT_CALL_STACK_INFO]      = "Show more call stack info by run: addr2line -e %s%s -a -f %.*s",
-        [PRINT_CALL_STACK_ERR]       = "Dump call stack has an error",
-        [PRINT_FAULT_ON_THREAD]      = "Fault on thread %s",
-        [PRINT_FAULT_ON_HANDLER]     = "Fault on interrupt or bare metal(no OS) environment",
-        [PRINT_REGS_TITLE]           = "=================== Registers information ====================",
-        [PRINT_HFSR_VECTBL]          = "Hard fault is caused by failed vector fetch",
-        [PRINT_MFSR_IACCVIOL]        = "Memory management fault is caused by instruction access violation",
-        [PRINT_MFSR_DACCVIOL]        = "Memory management fault is caused by data access violation",
-        [PRINT_MFSR_MUNSTKERR]       = "Memory management fault is caused by unstacking error",
-        [PRINT_MFSR_MSTKERR]         = "Memory management fault is caused by stacking error",
-        [PRINT_MFSR_MLSPERR]         = "Memory management fault is caused by floating-point lazy state preservation",
-        [PRINT_BFSR_IBUSERR]         = "Bus fault is caused by instruction access violation",
-        [PRINT_BFSR_PRECISERR]       = "Bus fault is caused by precise data access violation",
-        [PRINT_BFSR_IMPREISERR]      = "Bus fault is caused by imprecise data access violation",
-        [PRINT_BFSR_UNSTKERR]        = "Bus fault is caused by unstacking error",
-        [PRINT_BFSR_STKERR]          = "Bus fault is caused by stacking error",
-        [PRINT_BFSR_LSPERR]          = "Bus fault is caused by floating-point lazy state preservation",
-        [PRINT_UFSR_UNDEFINSTR]      = "Usage fault is caused by attempts to execute an undefined instruction",
-        [PRINT_UFSR_INVSTATE]        = "Usage fault is caused by attempts to switch to an invalid state (e.g., ARM)",
-        [PRINT_UFSR_INVPC]           = "Usage fault is caused by attempts to do an exception with a bad value in the EXC_RETURN number",
-        [PRINT_UFSR_NOCP]            = "Usage fault is caused by attempts to execute a coprocessor instruction",
-        [PRINT_UFSR_UNALIGNED]       = "Usage fault is caused by indicates that an unaligned access fault has taken place",
-        [PRINT_UFSR_DIVBYZERO]       = "Usage fault is caused by Indicates a divide by zero has taken place (can be set only if DIV_0_TRP is set)",
-        [PRINT_DFSR_HALTED]          = "Debug fault is caused by halt requested in NVIC",
-        [PRINT_DFSR_BKPT]            = "Debug fault is caused by BKPT instruction executed",
-        [PRINT_DFSR_DWTTRAP]         = "Debug fault is caused by DWT match occurred",
-        [PRINT_DFSR_VCATCH]          = "Debug fault is caused by Vector fetch occurred",
-        [PRINT_DFSR_EXTERNAL]        = "Debug fault is caused by EDBGRQ signal asserted",
-        [PRINT_MMAR]                 = "The memory management fault occurred address is %08x",
-        [PRINT_BFAR]                 = "The bus fault occurred address is %08x",
-#elif (CMB_PRINT_LANGUAGE == CMB_PRINT_LANUUAGE_CHINESE)
-        [PRINT_FIRMWARE_INFO]        = "固件名称：%s，硬件版本号：%s，软件版本号：%s",
-        [PRINT_ASSERT_ON_THREAD]     = "在线程(%s)中发生断言",
-        [PRINT_ASSERT_ON_HANDLER]    = "在中断或裸机环境下发生断言",
-        [PRINT_THREAD_STACK_INFO]    = "=========== 线程堆栈信息 ===========",
-        [PRINT_MAIN_STACK_INFO]      = "============ 主堆栈信息 ============",
-        [PRINT_CALL_STACK_INFO]      = "查看更多函数调用栈信息，请运行：addr2line -e %s%s -a -f %.*s",
-        [PRINT_CALL_STACK_ERR]       = "获取函数调用栈失败",
-        [PRINT_FAULT_ON_THREAD]      =  "在线程(%s)中发生错误异常",
-        [PRINT_FAULT_ON_HANDLER]     = "在中断或裸机环境下发生错误异常",
-        [PRINT_REGS_TITLE]           = "========================= 寄存器信息 =========================",
-        [PRINT_HFSR_VECTBL]          = "发生硬错误，原因：取中断向量时出错",
-        [PRINT_MFSR_IACCVIOL]        = "发生存储器管理错误，原因：企图从不允许访问的区域取指令",
-        [PRINT_MFSR_DACCVIOL]        = "发生存储器管理错误，原因：企图从不允许访问的区域读、写数据",
-        [PRINT_MFSR_MUNSTKERR]       = "发生存储器管理错误，原因：出栈时企图访问不被允许的区域",
-        [PRINT_MFSR_MSTKERR]         = "发生存储器管理错误，原因：入栈时企图访问不被允许的区域",
-        [PRINT_MFSR_MLSPERR]         = "发生存储器管理错误，原因：惰性保存浮点状态时发生错误",
-        [PRINT_BFSR_IBUSERR]         = "发生总线错误，原因：指令总线错误",
-        [PRINT_BFSR_PRECISERR]       = "发生总线错误，原因：精确的数据总线错误",
-        [PRINT_BFSR_IMPREISERR]      = "发生总线错误，原因：不精确的数据总线错误",
-        [PRINT_BFSR_UNSTKERR]        = "发生总线错误，原因：出栈时发生错误",
-        [PRINT_BFSR_STKERR]          = "发生总线错误，原因：入栈时发生错误",
-        [PRINT_BFSR_LSPERR]          = "发生总线错误，原因：惰性保存浮点状态时发生错误",
-        [PRINT_UFSR_UNDEFINSTR]      = "发生用法错误，原因：企图执行未定义指令",
-        [PRINT_UFSR_INVSTATE]        = "发生用法错误，原因：试图切换到 ARM 状态",
-        [PRINT_UFSR_INVPC]           = "发生用法错误，原因：无效的异常返回码",
-        [PRINT_UFSR_NOCP]            = "发生用法错误，原因：企图执行协处理器指令",
-        [PRINT_UFSR_UNALIGNED]       = "发生用法错误，原因：企图执行非对齐访问",
-        [PRINT_UFSR_DIVBYZERO]       = "发生用法错误，原因：企图执行除 0 操作",
-        [PRINT_DFSR_HALTED]          = "发生调试错误，原因：NVIC 停机请求",
-        [PRINT_DFSR_BKPT]            = "发生调试错误，原因：执行 BKPT 指令",
-        [PRINT_DFSR_DWTTRAP]         = "发生调试错误，原因：数据监测点匹配",
-        [PRINT_DFSR_VCATCH]          = "发生调试错误，原因：发生向量捕获",
-        [PRINT_DFSR_EXTERNAL]        = "发生调试错误，原因：外部调试请求",
-        [PRINT_MMAR]                 = "发生存储器管理错误的地址：%08x",
-        [PRINT_BFAR]                 = "发生总线错误的地址：%08x",
+        [PRINT_MAIN_STACK_CFG_ERROR]  = "ERROR: Unable to get the main stack information, please check the configuration of the main stack",
+        [PRINT_FIRMWARE_INFO]         = "Firmware name: %s, hardware version: %s, software version: %s",
+        [PRINT_ASSERT_ON_THREAD]      = "Assert on thread %s",
+        [PRINT_ASSERT_ON_HANDLER]     = "Assert on interrupt or bare metal(no OS) environment",
+        [PRINT_THREAD_STACK_INFO]     = "===== Thread stack information =====",
+        [PRINT_MAIN_STACK_INFO]       = "====== Main stack information ======",
+        [PRINT_THREAD_STACK_OVERFLOW] = "Error: Thread stack(%08x) was overflow",
+        [PRINT_MAIN_STACK_OVERFLOW]   = "Error: Main stack(%08x) was overflow",
+        [PRINT_CALL_STACK_INFO]       = "Show more call stack info by run: addr2line -e %s%s -a -f %.*s",
+        [PRINT_CALL_STACK_ERR]        = "Dump call stack has an error",
+        [PRINT_FAULT_ON_THREAD]       = "Fault on thread %s",
+        [PRINT_FAULT_ON_HANDLER]      = "Fault on interrupt or bare metal(no OS) environment",
+        [PRINT_REGS_TITLE]            = "=================== Registers information ====================",
+        [PRINT_HFSR_VECTBL]           = "Hard fault is caused by failed vector fetch",
+        [PRINT_MFSR_IACCVIOL]         = "Memory management fault is caused by instruction access violation",
+        [PRINT_MFSR_DACCVIOL]         = "Memory management fault is caused by data access violation",
+        [PRINT_MFSR_MUNSTKERR]        = "Memory management fault is caused by unstacking error",
+        [PRINT_MFSR_MSTKERR]          = "Memory management fault is caused by stacking error",
+        [PRINT_MFSR_MLSPERR]          = "Memory management fault is caused by floating-point lazy state preservation",
+        [PRINT_BFSR_IBUSERR]          = "Bus fault is caused by instruction access violation",
+        [PRINT_BFSR_PRECISERR]        = "Bus fault is caused by precise data access violation",
+        [PRINT_BFSR_IMPREISERR]       = "Bus fault is caused by imprecise data access violation",
+        [PRINT_BFSR_UNSTKERR]         = "Bus fault is caused by unstacking error",
+        [PRINT_BFSR_STKERR]           = "Bus fault is caused by stacking error",
+        [PRINT_BFSR_LSPERR]           = "Bus fault is caused by floating-point lazy state preservation",
+        [PRINT_UFSR_UNDEFINSTR]       = "Usage fault is caused by attempts to execute an undefined instruction",
+        [PRINT_UFSR_INVSTATE]         = "Usage fault is caused by attempts to switch to an invalid state (e.g., ARM)",
+        [PRINT_UFSR_INVPC]            = "Usage fault is caused by attempts to do an exception with a bad value in the EXC_RETURN number",
+        [PRINT_UFSR_NOCP]             = "Usage fault is caused by attempts to execute a coprocessor instruction",
+        [PRINT_UFSR_UNALIGNED]        = "Usage fault is caused by indicates that an unaligned access fault has taken place",
+        [PRINT_UFSR_DIVBYZERO0]       = "Usage fault is caused by Indicates a divide by zero has taken place (can be set only if DIV_0_TRP is set)",
+        [PRINT_DFSR_HALTED]           = "Debug fault is caused by halt requested in NVIC",
+        [PRINT_DFSR_BKPT]             = "Debug fault is caused by BKPT instruction executed",
+        [PRINT_DFSR_DWTTRAP]          = "Debug fault is caused by DWT match occurred",
+        [PRINT_DFSR_VCATCH]           = "Debug fault is caused by Vector fetch occurred",
+        [PRINT_DFSR_EXTERNAL]         = "Debug fault is caused by EDBGRQ signal asserted",
+        [PRINT_MMAR]                  = "The memory management fault occurred address is %08x",
+        [PRINT_BFAR]                  = "The bus fault occurred address is %08x",
+#elif (CMB_PRINT_LANGUAGE == CMB_PRINT_LANGUAGE_CHINESE)
+        [PRINT_MAIN_STACK_CFG_ERROR]  = "错误：无法获取主栈信息，请检查主栈的相关配置",
+        [PRINT_FIRMWARE_INFO]         = "固件名称：%s，硬件版本号：%s，软件版本号：%s",
+        [PRINT_ASSERT_ON_THREAD]      = "在线程(%s)中发生断言",
+        [PRINT_ASSERT_ON_HANDLER]     = "在中断或裸机环境下发生断言",
+        [PRINT_THREAD_STACK_INFO]     = "=========== 线程堆栈信息 ===========",
+        [PRINT_MAIN_STACK_INFO]       = "============ 主堆栈信息 ============",
+        [PRINT_THREAD_STACK_OVERFLOW] = "错误：线程栈(%08x)发生溢出",
+        [PRINT_MAIN_STACK_OVERFLOW]   = "错误：主栈(%08x)发生溢出",
+        [PRINT_CALL_STACK_INFO]       = "查看更多函数调用栈信息，请运行：addr2line -e %s%s -a -f %.*s",
+        [PRINT_CALL_STACK_ERR]        = "获取函数调用栈失败",
+        [PRINT_FAULT_ON_THREAD]       =  "在线程(%s)中发生错误异常",
+        [PRINT_FAULT_ON_HANDLER]      = "在中断或裸机环境下发生错误异常",
+        [PRINT_REGS_TITLE]            = "========================= 寄存器信息 =========================",
+        [PRINT_HFSR_VECTBL]           = "发生硬错误，原因：取中断向量时出错",
+        [PRINT_MFSR_IACCVIOL]         = "发生存储器管理错误，原因：企图从不允许访问的区域取指令",
+        [PRINT_MFSR_DACCVIOL]         = "发生存储器管理错误，原因：企图从不允许访问的区域读、写数据",
+        [PRINT_MFSR_MUNSTKERR]        = "发生存储器管理错误，原因：出栈时企图访问不被允许的区域",
+        [PRINT_MFSR_MSTKERR]          = "发生存储器管理错误，原因：入栈时企图访问不被允许的区域",
+        [PRINT_MFSR_MLSPERR]          = "发生存储器管理错误，原因：惰性保存浮点状态时发生错误",
+        [PRINT_BFSR_IBUSERR]          = "发生总线错误，原因：指令总线错误",
+        [PRINT_BFSR_PRECISERR]        = "发生总线错误，原因：精确的数据总线错误",
+        [PRINT_BFSR_IMPREISERR]       = "发生总线错误，原因：不精确的数据总线错误",
+        [PRINT_BFSR_UNSTKERR]         = "发生总线错误，原因：出栈时发生错误",
+        [PRINT_BFSR_STKERR]           = "发生总线错误，原因：入栈时发生错误",
+        [PRINT_BFSR_LSPERR]           = "发生总线错误，原因：惰性保存浮点状态时发生错误",
+        [PRINT_UFSR_UNDEFINSTR]       = "发生用法错误，原因：企图执行未定义指令",
+        [PRINT_UFSR_INVSTATE]         = "发生用法错误，原因：试图切换到 ARM 状态",
+        [PRINT_UFSR_INVPC]            = "发生用法错误，原因：无效的异常返回码",
+        [PRINT_UFSR_NOCP]             = "发生用法错误，原因：企图执行协处理器指令",
+        [PRINT_UFSR_UNALIGNED]        = "发生用法错误，原因：企图执行非对齐访问",
+        [PRINT_UFSR_DIVBYZERO0]       = "发生用法错误，原因：企图执行除 0 操作",
+        [PRINT_DFSR_HALTED]           = "发生调试错误，原因：NVIC 停机请求",
+        [PRINT_DFSR_BKPT]             = "发生调试错误，原因：执行 BKPT 指令",
+        [PRINT_DFSR_DWTTRAP]          = "发生调试错误，原因：数据监测点匹配",
+        [PRINT_DFSR_VCATCH]           = "发生调试错误，原因：发生向量捕获",
+        [PRINT_DFSR_EXTERNAL]         = "发生调试错误，原因：外部调试请求",
+        [PRINT_MMAR]                  = "发生存储器管理错误的地址：%08x",
+        [PRINT_BFAR]                  = "发生总线错误的地址：%08x",
 #else
     #error "CMB_PRINT_LANGUAGE defined error in 'cmb_cfg.h'"
 #endif
@@ -210,15 +196,14 @@ static size_t code_size = 0;
 static bool init_ok = false;
 static char call_stack_info[CMB_CALL_STACK_MAX_DEPTH * (8 + 1)] = { 0 };
 static bool on_fault = false;
+static bool stack_is_overflow = false;
 static struct cmb_hard_fault_regs regs;
 
 #if (CMB_CPU_PLATFORM_TYPE == CMB_CPU_ARM_CORTEX_M4) || (CMB_CPU_PLATFORM_TYPE == CMB_CPU_ARM_CORTEX_M7)
 static bool statck_has_fpu_regs = false;
 #endif
 
-#ifdef CMB_USING_OS_PLATFORM
 static bool on_thread_before_fault = false;
-#endif
 
 /**
  * library initialize
@@ -246,6 +231,11 @@ void cm_backtrace_init(const char *firmware_name, const char *hardware_ver, cons
 #else
     #error "not supported compiler"
 #endif
+
+    if (main_stack_size == 0) {
+        cmb_println(print_info[PRINT_MAIN_STACK_CFG_ERROR]);
+        return;
+    }
 
     init_ok = true;
 }
@@ -275,20 +265,16 @@ static void get_cur_thread_stack_info(uint32_t sp, uint32_t *start_addr, size_t 
 #elif (CMB_OS_PLATFORM_TYPE == CMB_OS_PLATFORM_UCOSII)
     extern OS_TCB *OSTCBCur;
 
-#if OS_TASK_PROFILE_EN > 0
-    *start_addr = (uint32_t) OSTCBCur->OSTCBStkBase;
-    *size = (sp + OSTCBCur->OSTCBStkUsed) - *start_addr;
-#else
-     #error "OS_TASK_PROFILE_EN isn't enable in 'OS_CFG.H'"
-#endif /* OS_TASK_PROFILE_EN > 0 */
-
-    //TODO 测试
+    *start_addr = (uint32_t) OSTCBCur->OSTCBStkBottom;
+    *size = OSTCBCur->OSTCBStkSize * sizeof(OS_STK);
 #elif (CMB_OS_PLATFORM_TYPE == CMB_OS_PLATFORM_UCOSIII)
-    #error "not implemented, I hope you can do this"
-    //TODO 待实现
-#elif (CMB_OS_PLATFORM_TYPE == CMB_OS_PLATFORM_FREERTOS)
-    #error "not implemented, I hope you can do this"
-    //TODO 待实现
+    extern OS_TCB *OSTCBCurPtr; 
+    
+    *start_addr = (uint32_t) OSTCBCurPtr->StkBasePtr;
+    *size = OSTCBCurPtr->StkSize * sizeof(CPU_STK_SIZE);
+#elif (CMB_OS_PLATFORM_TYPE == CMB_OS_PLATFORM_FREERTOS)   
+    *start_addr = (uint32_t)vTaskStackAddr();
+    *size = vTaskStackSize() * sizeof( StackType_t );
 #endif
 }
 
@@ -301,42 +287,41 @@ static const char *get_cur_thread_name(void) {
 #elif (CMB_OS_PLATFORM_TYPE == CMB_OS_PLATFORM_UCOSII)
     extern OS_TCB *OSTCBCur;
 
-#if OS_TASK_NAME_SIZE > 1
-        return OSTCBCur->OSTCBTaskName;
+#if OS_TASK_NAME_SIZE > 0 || OS_TASK_NAME_EN > 0
+        return (const char *)OSTCBCur->OSTCBTaskName;
 #else
         return NULL;
-#endif /* OS_TASK_NAME_SIZE > 1 */
+#endif /* OS_TASK_NAME_SIZE > 0 || OS_TASK_NAME_EN > 0 */
 
-    //TODO 待测试
 #elif (CMB_OS_PLATFORM_TYPE == CMB_OS_PLATFORM_UCOSIII)
-    #error "not implemented, I hope you can do this"
-    //TODO 待实现
+    extern OS_TCB *OSTCBCurPtr; 
+    
+    return (const char *)OSTCBCurPtr->NamePtr;
 #elif (CMB_OS_PLATFORM_TYPE == CMB_OS_PLATFORM_FREERTOS)
-    #error "not implemented, I hope you can do this"
-    //TODO 待实现
+    return vTaskName();
 #endif
 }
 
-#ifdef CMB_USING_DUMP_STACK_INFO
-/**
- * dump current thread stack information
- */
-static void dump_cur_thread_stack(uint32_t stack_start_addr, size_t stack_size, uint32_t *stack_pointer) {
-    cmb_println(print_info[PRINT_THREAD_STACK_INFO]);
-    for (; (uint32_t) stack_pointer < stack_start_addr + stack_size; stack_pointer++) {
-        cmb_println("  addr: %08x    data: %08x", stack_pointer, *stack_pointer);
-    }
-    cmb_println("====================================");
-}
-#endif /* CMB_USING_DUMP_STACK_INFO */
 #endif /* CMB_USING_OS_PLATFORM */
 
 #ifdef CMB_USING_DUMP_STACK_INFO
 /**
- * dump current main stack information
+ * dump current stack information
  */
-static void dump_main_stack(uint32_t stack_start_addr, size_t stack_size, uint32_t *stack_pointer) {
-    cmb_println(print_info[PRINT_MAIN_STACK_INFO]);
+static void dump_stack(uint32_t stack_start_addr, size_t stack_size, uint32_t *stack_pointer) {
+    if (stack_is_overflow) {
+        if (on_thread_before_fault) {
+            cmb_println(print_info[PRINT_THREAD_STACK_OVERFLOW], stack_pointer);
+        } else {
+            cmb_println(print_info[PRINT_MAIN_STACK_OVERFLOW], stack_pointer);
+        }
+        if ((uint32_t) stack_pointer < stack_start_addr) {
+            stack_pointer = (uint32_t *) stack_start_addr;
+        } else if ((uint32_t) stack_pointer > stack_start_addr + stack_size) {
+            stack_pointer = (uint32_t *) (stack_start_addr + stack_size);
+        }
+    }
+    cmb_println(print_info[PRINT_THREAD_STACK_INFO]);
     for (; (uint32_t) stack_pointer < stack_start_addr + stack_size; stack_pointer++) {
         cmb_println("  addr: %08x    data: %08x", stack_pointer, *stack_pointer);
     }
@@ -359,14 +344,16 @@ size_t cm_backtrace_call_stack(uint32_t *buffer, size_t size, uint32_t sp) {
     bool regs_saved_lr_is_valid = false;
 
     if (on_fault) {
-        /* first depth is PC */
-        buffer[depth++] = regs.saved.pc;
-        /* second depth is from LR, so need decrease a word to PC */
-        pc = regs.saved.lr - sizeof(size_t);
-        if ((pc >= code_start_addr) && (pc <= code_start_addr + code_size) && (depth < CMB_CALL_STACK_MAX_DEPTH)
-                && (depth < size)) {
-            buffer[depth++] = pc;
-            regs_saved_lr_is_valid = true;
+        if (!stack_is_overflow) {
+            /* first depth is PC */
+            buffer[depth++] = regs.saved.pc;
+            /* second depth is from LR, so need decrease a word to PC */
+            pc = regs.saved.lr - sizeof(size_t);
+            if ((pc >= code_start_addr) && (pc <= code_start_addr + code_size) && (depth < CMB_CALL_STACK_MAX_DEPTH)
+                    && (depth < size)) {
+                buffer[depth++] = pc;
+                regs_saved_lr_is_valid = true;
+            }
         }
 
 #ifdef CMB_USING_OS_PLATFORM
@@ -376,17 +363,29 @@ size_t cm_backtrace_call_stack(uint32_t *buffer, size_t size, uint32_t sp) {
         }
     } else {
         /* OS environment */
-        if (__get_SP() == __get_PSP()) {
+        if (cmb_get_sp() == cmb_get_psp()) {
             get_cur_thread_stack_info(sp, &stack_start_addr, &stack_size);
         }
 #endif /* CMB_USING_OS_PLATFORM */
 
     }
 
+    if (stack_is_overflow) {
+        if (sp < stack_start_addr) {
+            sp = stack_start_addr;
+        } else if (sp > stack_start_addr + stack_size) {
+            sp = stack_start_addr + stack_size;
+        }
+    }
+
     /* copy called function address */
     for (; sp < stack_start_addr + stack_size; sp += sizeof(size_t)) {
         /* the *sp value may be LR, so need decrease a word to PC */
         pc = *((uint32_t *) sp) - sizeof(size_t);
+        /* the Cortex-M using thumb instruction, so the pc must be an odd number */
+        if (pc % 2 == 0) {
+            continue;
+        }
         if ((pc >= code_start_addr) && (pc <= code_start_addr + code_size) && (depth < CMB_CALL_STACK_MAX_DEPTH)
                 && (depth < size)) {
             /* the second depth function may be already saved, so need ignore repeat */
@@ -433,7 +432,7 @@ void cm_backtrace_assert(uint32_t sp) {
     CMB_ASSERT(init_ok);
 
 #ifdef CMB_USING_OS_PLATFORM
-    uint32_t cur_stack_pointer = __get_SP();
+    uint32_t cur_stack_pointer = cmb_get_sp();
 #endif
 
     cmb_println("");
@@ -441,21 +440,21 @@ void cm_backtrace_assert(uint32_t sp) {
 
 #ifdef CMB_USING_OS_PLATFORM
     /* OS environment */
-    if (cur_stack_pointer == __get_MSP()) {
+    if (cur_stack_pointer == cmb_get_msp()) {
         cmb_println(print_info[PRINT_ASSERT_ON_HANDLER]);
 
 #ifdef CMB_USING_DUMP_STACK_INFO
-        dump_main_stack(main_stack_start_addr, main_stack_size, (uint32_t *) sp);
+        dump_stack(main_stack_start_addr, main_stack_size, (uint32_t *) sp);
 #endif /* CMB_USING_DUMP_STACK_INFO */
 
-    } else if (cur_stack_pointer == __get_PSP()) {
+    } else if (cur_stack_pointer == cmb_get_psp()) {
         cmb_println(print_info[PRINT_ASSERT_ON_THREAD], get_cur_thread_name());
 
 #ifdef CMB_USING_DUMP_STACK_INFO
         uint32_t stack_start_addr;
         size_t stack_size;
         get_cur_thread_stack_info(sp, &stack_start_addr, &stack_size);
-        dump_cur_thread_stack(stack_start_addr, stack_size, (uint32_t *) sp);
+        dump_stack(stack_start_addr, stack_size, (uint32_t *) sp);
 #endif /* CMB_USING_DUMP_STACK_INFO */
 
     }
@@ -464,7 +463,7 @@ void cm_backtrace_assert(uint32_t sp) {
 
     /* bare metal(no OS) environment */
 #ifdef CMB_USING_DUMP_STACK_INFO
-    dump_main_stack(main_stack_start_addr, main_stack_size, (uint32_t *) sp);
+    dump_stack(main_stack_start_addr, main_stack_size, (uint32_t *) sp);
 #endif /* CMB_USING_DUMP_STACK_INFO */
 
 #endif /* CMB_USING_OS_PLATFORM */
@@ -556,8 +555,8 @@ static void fault_diagnosis(void) {
             if (regs.ufsr.bits.UNALIGNED) {
                 cmb_println(print_info[PRINT_UFSR_UNALIGNED]);
             }
-            if (regs.ufsr.bits.DIVBYZERO) {
-                cmb_println(print_info[PRINT_UFSR_DIVBYZERO]);
+            if (regs.ufsr.bits.DIVBYZERO0) {
+                cmb_println(print_info[PRINT_UFSR_DIVBYZERO0]);
             }
         }
     }
@@ -622,8 +621,8 @@ void cm_backtrace_fault(uint32_t fault_handler_lr, uint32_t fault_handler_sp) {
     on_thread_before_fault = fault_handler_lr & (1UL << 2);
     /* check which stack was used before (MSP or PSP) */
     if (on_thread_before_fault) {
-        cmb_println(print_info[PRINT_FAULT_ON_THREAD], get_cur_thread_name());
-        saved_regs_addr = stack_pointer = __get_PSP();
+        cmb_println(print_info[PRINT_FAULT_ON_THREAD], get_cur_thread_name() != NULL ? get_cur_thread_name() : "NO_NAME");
+        saved_regs_addr = stack_pointer = cmb_get_psp();
 
 #ifdef CMB_USING_DUMP_STACK_INFO
         get_cur_thread_stack_info(stack_pointer, &stack_start_addr, &stack_size);
@@ -644,42 +643,39 @@ void cm_backtrace_fault(uint32_t fault_handler_lr, uint32_t fault_handler_sp) {
     stack_pointer = statck_del_fpu_regs(fault_handler_lr, stack_pointer);
 #endif /* (CMB_CPU_PLATFORM_TYPE == CMB_CPU_ARM_CORTEX_M4) || (CMB_CPU_PLATFORM_TYPE == CMB_CPU_ARM_CORTEX_M7) */
 
-    /* dump stack information */
 #ifdef CMB_USING_DUMP_STACK_INFO
-#ifdef CMB_USING_OS_PLATFORM
-    if (on_thread_before_fault) {
-        dump_cur_thread_stack(stack_start_addr, stack_size, (uint32_t *) stack_pointer);
-    } else {
-        dump_main_stack(stack_start_addr, stack_size, (uint32_t *) stack_pointer);
+    /* check stack overflow */
+    if (stack_pointer < stack_start_addr || stack_pointer > stack_start_addr + stack_size) {
+        stack_is_overflow = true;
     }
-#else
-    /* bare metal(no OS) environment */
-    dump_main_stack(stack_start_addr, stack_size, (uint32_t *) stack_pointer);
-#endif /* CMB_USING_OS_PLATFORM */
+    /* dump stack information */
+    dump_stack(stack_start_addr, stack_size, (uint32_t *) stack_pointer);
 #endif /* CMB_USING_DUMP_STACK_INFO */
 
-    /* dump register */
-    cmb_println(print_info[PRINT_REGS_TITLE]);
+    /* the stack frame may be get failed when it is overflow  */
+    if (!stack_is_overflow) {
+        /* dump register */
+        cmb_println(print_info[PRINT_REGS_TITLE]);
 
-    regs.saved.r0        = ((uint32_t *)saved_regs_addr)[0];  // Register R0
-    regs.saved.r1        = ((uint32_t *)saved_regs_addr)[1];  // Register R1
-    regs.saved.r2        = ((uint32_t *)saved_regs_addr)[2];  // Register R2
-    regs.saved.r3        = ((uint32_t *)saved_regs_addr)[3];  // Register R3
-    regs.saved.r12       = ((uint32_t *)saved_regs_addr)[4];  // Register R12
-    regs.saved.lr        = ((uint32_t *)saved_regs_addr)[5];  // Link register LR
-    regs.saved.pc        = ((uint32_t *)saved_regs_addr)[6];  // Program counter PC
-    regs.saved.psr.value = ((uint32_t *)saved_regs_addr)[7];  // Program status word PSR
+        regs.saved.r0        = ((uint32_t *)saved_regs_addr)[0];  // Register R0
+        regs.saved.r1        = ((uint32_t *)saved_regs_addr)[1];  // Register R1
+        regs.saved.r2        = ((uint32_t *)saved_regs_addr)[2];  // Register R2
+        regs.saved.r3        = ((uint32_t *)saved_regs_addr)[3];  // Register R3
+        regs.saved.r12       = ((uint32_t *)saved_regs_addr)[4];  // Register R12
+        regs.saved.lr        = ((uint32_t *)saved_regs_addr)[5];  // Link register LR
+        regs.saved.pc        = ((uint32_t *)saved_regs_addr)[6];  // Program counter PC
+        regs.saved.psr.value = ((uint32_t *)saved_regs_addr)[7];  // Program status word PSR
 
-
-    cmb_println("  %s: %08x  %s: %08x  %s: %08x  %s: %08x", regs_name[0], regs.saved.r0,
-                                                            regs_name[1], regs.saved.r1,
-                                                            regs_name[2], regs.saved.r2,
-                                                            regs_name[3], regs.saved.r3);
-    cmb_println("  %s: %08x  %s: %08x  %s: %08x  %s: %08x", regs_name[4], regs.saved.r12,
-                                                            regs_name[5], regs.saved.lr,
-                                                            regs_name[6], regs.saved.pc,
-                                                            regs_name[7], regs.saved.psr.value);
-    cmb_println("==============================================================");
+        cmb_println("  %s: %08x  %s: %08x  %s: %08x  %s: %08x", regs_name[0], regs.saved.r0,
+                                                                regs_name[1], regs.saved.r1,
+                                                                regs_name[2], regs.saved.r2,
+                                                                regs_name[3], regs.saved.r3);
+        cmb_println("  %s: %08x  %s: %08x  %s: %08x  %s: %08x", regs_name[4], regs.saved.r12,
+                                                                regs_name[5], regs.saved.lr,
+                                                                regs_name[6], regs.saved.pc,
+                                                                regs_name[7], regs.saved.psr.value);
+        cmb_println("==============================================================");
+    }
 
     /* the Cortex-M0 is not support fault diagnosis */
 #if (CMB_CPU_PLATFORM_TYPE != CMB_CPU_ARM_CORTEX_M0)
